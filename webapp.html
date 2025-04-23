@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Web App: Pong - Rainbow FX</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    canvas {
+      border: 2px solid #fff;
+      transition: transform 0.1s ease-in-out;
+    }
+
+    .scoreboard, .message, .infoContainer {
+      position: absolute;
+      color: #fff;
+    }
+
+    .scoreboard {
+      top: 10px;
+      font-size: 20px;
+    }
+
+    .message {
+      top: 40px;
+      font-size: 25px;
+      text-align: center;
+    }
+
+    .infoContainer {
+      top: 70px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      transition: top 0.3s ease;
+    }
+
+    .infoContainer.shifted {
+      top: 90px;
+    }
+
+    .rallyCounter {
+      font-size: 20px;
+    }
+
+    a {
+      color: white;
+      text-decoration: none;
+      font-size: 18px;
+    }
+
+    .startScreen {
+      color: white;
+      font-size: 24px;
+      margin-top: 20px;
+    }
+
+    @keyframes shake {
+      0% { transform: translateX(0); }
+      20% { transform: translateX(-6px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+      100% { transform: translateX(0); }
+    }
+
+    .subtle-shake { animation: shake 0.02s ease-in-out; }
+    .medium-shake { animation: shake 0.09s ease-in-out; }
+    .strong-shake { animation: shake 0.18s ease-in-out; }
+  </style>
+</head>
+<body>
+  <div class="scoreboard"><span id="score">Player 1: 0 | AI: 0</span></div>
+  <div class="message" id="message"></div>
+  <div class="infoContainer" id="infoContainer">
+    <a href="index.html">← Back to Home Page</a>
+    <div class="rallyCounter" id="rallyCounter">Rally: 0</div>
+  </div>
+
+  <canvas id="pong" width="600" height="400"></canvas>
+  <div class="startScreen" id="startScreen">Press "S" to Start</div>
+
+  <script>
+    const canvas = document.getElementById("pong");
+    const ctx = canvas.getContext("2d");
+
+    const paddleWidth = 10, paddleHeight = 100;
+    let paddleSpeed = 4, ballSpeedX = 6.5, ballSpeedY = 6.5;
+    let player1Score = 0, aiScore = 0;
+    let ballX = canvas.width / 2, ballY = canvas.height / 2;
+    let player1Y = canvas.height / 2 - paddleHeight / 2;
+    let aiY = canvas.height / 2 - paddleHeight / 2;
+    let upArrowPressed = false, downArrowPressed = false;
+    let gameOver = false, gameStarted = false;
+
+    const acceleration = 0.12;
+    let ballCompression = 0;
+    let rallyCount = 0;
+    const maxRallyCount = 30;
+    let ballTrailOpacity = 0.1;
+    let ballTrail = [];
+    let sparks = [];
+
+    class Spark {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        const minSize = 0.2 + (rallyCount / maxRallyCount) * 0.6;
+        const maxSize = 0.5 + (rallyCount / maxRallyCount) * 1.0;
+        this.size = Math.random() * (maxSize - minSize) + minSize;
+        this.life = 60;
+        this.vx = (Math.random() - 0.5) * 3;
+        this.vy = (Math.random() - 1.5) * 3;
+        this.gravity = 0.15;
+      }
+
+      update() {
+        this.vy += this.gravity;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life--;
+      }
+
+      draw() {
+        const alpha = this.life / 60;
+        const hue = (performance.now() / 5 + Math.random() * 60) % 360;
+
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue}, 100%, 65%, ${alpha})`;
+        ctx.shadowColor = `hsla(${hue}, 100%, 75%, ${alpha})`;
+        ctx.shadowBlur = 20;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.closePath();
+      }
+    }
+
+    function spawnSparks(x, y) {
+      for (let i = 0; i < 20; i++) {
+        sparks.push(new Spark(x, y));
+      }
+    }
+
+    function updateBallTrailOpacity() {
+      ballTrailOpacity = Math.min(0.1 + (rallyCount / 25), 1);
+    }
+
+    function capBallSpeed() {
+      if (rallyCount >= maxRallyCount) {
+        ballSpeedX = Math.sign(ballSpeedX) * Math.min(Math.abs(ballSpeedX), 10);
+        ballSpeedY = Math.sign(ballSpeedY) * Math.min(Math.abs(ballSpeedY), 10);
+      }
+    }
+
+    function triggerShake() {
+      if (rallyCount < 8) return;
+      const className = rallyCount >= 21 ? 'strong-shake' :
+                        rallyCount >= 15 ? 'medium-shake' : 'subtle-shake';
+      canvas.classList.add(className);
+      setTimeout(() => canvas.classList.remove(className), 700);
+    }
+
+    function drawBall() {
+      updateBallTrailOpacity();
+      ballTrail.push({ x: ballX, y: ballY });
+      if (ballTrail.length > 10) ballTrail.shift();
+
+      for (let i = 0; i < ballTrail.length; i++) {
+        const t = ballTrail[i];
+        const hue = (performance.now() / 10 + i * 36) % 360;
+        const alpha = (i / ballTrail.length) * ballTrailOpacity;
+        const lightness = 55 + alpha * 10;
+
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, 10, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue}, 100%, ${lightness}%, ${alpha})`;
+        ctx.shadowColor = `hsla(${hue}, 100%, 70%, ${alpha})`;
+        ctx.shadowBlur = 15;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.closePath();
+      }
+
+      ctx.beginPath();
+      ctx.arc(ballX, ballY, 10 + ballCompression, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff";
+      ctx.shadowColor = "#fff";
+      ctx.shadowBlur = 12;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.closePath();
+    }
+
+    function drawPaddle(x, y) {
+      const radius = paddleWidth;
+
+      // Middle rectangle
+      ctx.beginPath();
+      ctx.rect(x, y + radius / 2, paddleWidth, paddleHeight - radius);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.closePath();
+
+      // Top curve
+      ctx.beginPath();
+      ctx.arc(x + paddleWidth / 2, y + radius / 2, radius / 2, Math.PI, 0);
+      ctx.fill();
+      ctx.closePath();
+
+      // Bottom curve
+      ctx.beginPath();
+      ctx.arc(x + paddleWidth / 2, y + paddleHeight - radius / 2, radius / 2, 0, Math.PI);
+      ctx.fill();
+      ctx.closePath();
+    }
+
+    function isBallCollidingWithPaddle(ballX, ballY, paddleX, paddleY) {
+      const radius = 10;
+      const paddleRadius = paddleWidth / 2;
+
+      // Rect collision
+      if (
+        ballX - radius < paddleX + paddleWidth &&
+        ballX + radius > paddleX &&
+        ballY + radius > paddleY + paddleRadius &&
+        ballY - radius < paddleY + paddleHeight - paddleRadius
+      ) return true;
+
+      // Top arc
+      let dx = ballX - (paddleX + paddleWidth / 2);
+      let dy = ballY - (paddleY + paddleRadius);
+      if (dx * dx + dy * dy <= (radius + paddleRadius) ** 2) return true;
+
+      // Bottom arc
+      dy = ballY - (paddleY + paddleHeight - paddleRadius);
+      if (dx * dx + dy * dy <= (radius + paddleRadius) ** 2) return true;
+
+      return false;
+    }
+
+    function updateScore() {
+      document.getElementById("score").innerText = `Player 1: ${player1Score} | AI: ${aiScore}`;
+    }
+
+    function updateRallyCounter() {
+      document.getElementById("rallyCounter").innerText = `Rally: ${rallyCount}`;
+    }
+
+    function resetBall() {
+      ballX = canvas.width / 2;
+      ballY = canvas.height / 2;
+      ballSpeedX = Math.random() < 0.5 ? 6 : -6;
+      ballSpeedY = (Math.random() * 4) - 2;
+      ballCompression = 0;
+      ballTrail = [];
+    }
+
+    function resetGame() {
+      player1Score = 0;
+      aiScore = 0;
+      rallyCount = 0;
+      gameOver = false;
+      document.getElementById("message").innerText = "";
+      document.getElementById("infoContainer").classList.remove("shifted");
+      updateScore();
+      updateRallyCounter();
+      resetBall();
+      draw();
+    }
+
+    function aiMovement() {
+      if (aiY + paddleHeight / 2 < ballY) aiY += paddleSpeed;
+      else if (aiY + paddleHeight / 2 > ballY) aiY -= paddleSpeed;
+      aiY = Math.max(0, Math.min(canvas.height - paddleHeight, aiY));
+    }
+
+    function draw() {
+      if (gameOver || !gameStarted) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      sparks = sparks.filter(s => s.life > 0);
+      sparks.forEach(s => { s.update(); s.draw(); });
+
+      drawBall();
+      drawPaddle(0, player1Y);
+      drawPaddle(canvas.width - paddleWidth, aiY);
+
+      ballX += ballSpeedX;
+      ballY += ballSpeedY;
+
+      if (ballY + 10 > canvas.height || ballY - 10 < 0) ballSpeedY = -ballSpeedY;
+
+      if (isBallCollidingWithPaddle(ballX, ballY, 0, player1Y)) {
+        ballSpeedX = -ballSpeedX;
+        rallyCount++;
+        updateRallyCounter();
+        triggerShake();
+        spawnSparks(paddleWidth + 10, ballY);
+        ballCompression = 2;
+        setTimeout(() => ballCompression = 0, 50);
+        ballSpeedX += Math.sign(ballSpeedX) * acceleration;
+        ballSpeedY += (Math.sign(ballSpeedY) || (Math.random() < 0.5 ? -1 : 1)) * acceleration;
+      }
+
+      if (isBallCollidingWithPaddle(ballX, ballY, canvas.width - paddleWidth, aiY)) {
+        ballSpeedX = -ballSpeedX;
+        rallyCount++;
+        updateRallyCounter();
+        triggerShake();
+        spawnSparks(canvas.width - paddleWidth - 10, ballY);
+        ballCompression = 2;
+        setTimeout(() => ballCompression = 0, 50);
+        ballSpeedX += Math.sign(ballSpeedX) * acceleration;
+        ballSpeedY += (Math.sign(ballSpeedY) || (Math.random() < 0.5 ? -1 : 1)) * acceleration;
+      }
+
+      if (ballX + 10 > canvas.width) {
+        player1Score++;
+        updateScore();
+        resetBall();
+        rallyCount = 0;
+        updateRallyCounter();
+      }
+
+      if (ballX - 10 < 0) {
+        aiScore++;
+        updateScore();
+        resetBall();
+        rallyCount = 0;
+        updateRallyCounter();
+      }
+
+      if (upArrowPressed && player1Y > 0) player1Y -= paddleSpeed;
+      if (downArrowPressed && player1Y < canvas.height - paddleHeight) player1Y += paddleSpeed;
+
+      aiMovement();
+      capBallSpeed();
+
+      if (player1Score === 3 || aiScore === 3) {
+        gameOver = true;
+        document.getElementById("message").innerText = `Game Over! ${player1Score === 3 ? "Player 1" : "AI"} Wins! Press 'R' to Restart.`;
+        document.getElementById("infoContainer").classList.add("shifted");
+      } else {
+        requestAnimationFrame(draw);
+      }
+    }
+
+    document.addEventListener("keydown", e => {
+      if (!gameStarted && (e.key === "s" || e.key === "S")) {
+        gameStarted = true;
+        document.getElementById("startScreen").style.display = "none";
+        resetGame();
+      }
+
+      if (e.key === "ArrowUp") upArrowPressed = true;
+      if (e.key === "ArrowDown") downArrowPressed = true;
+      if ((e.key === "r" || e.key === "R") && gameOver) resetGame();
+    });
+
+    document.addEventListener("keyup", e => {
+      if (e.key === "ArrowUp") upArrowPressed = false;
+      if (e.key === "ArrowDown") downArrowPressed = false;
+    });
+  </script>
+</body>
+</html>
